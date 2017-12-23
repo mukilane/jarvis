@@ -1,22 +1,24 @@
-# Main File
+#!/usr/bin/env python
+
+# Author: Mukil Elango
 
 # Assistant Dependencies
 import argparse
 import os.path
 import json
 import threading
+import google.auth.transport.requests
 import google.oauth2.credentials
-
 from time import sleep
 from google.assistant.library import Assistant
 from google.assistant.library.event import EventType
 from google.assistant.library.file_helpers import existing_file
-
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk
-
 import commands
+# Endpoint for Assistant
+DEVICE_API_URL = 'https://embeddedassistant.googleapis.com/v1alpha2'
 
 class MyAssistant(object):
     def __init__(self, window):
@@ -29,7 +31,9 @@ class MyAssistant(object):
         self._task.start()
     
     def _run_task(self):
-        parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
+        parser = argparse.ArgumentParser(
+            formatter_class=argparse.RawTextHelpFormatter
+            )
         parser.add_argument(
             '--credentials',
             type=existing_file,
@@ -38,16 +42,74 @@ class MyAssistant(object):
                 os.path.expanduser('~/.config'),
                 'google-oauthlib-tool',
                 'credentials.json'
-            ),
-            help='Path to store and read OAuth2 credentials')
+                ),
+            help='Path to store and read OAuth2 credentials'
+            )
+        parser.add_argument(
+            '--device_model_id',
+            type=str,
+            metavar='DEVICE_MODEL_ID',
+            required=True,
+            help='Device id'
+        )
+        parser.add_argument('--project_id', type=str,
+                        metavar='PROJECT_ID', required=False,
+                        help='The project ID used to register device '
+                        + 'instances.')
+        # Project Id is optional
         args = parser.parse_args()
         with open(args.credentials, 'r') as f:
             credentials = google.oauth2.credentials.Credentials(token=None, **json.load(f))
 
-        with Assistant(credentials) as assistant:
+        with Assistant(credentials, args.device_model_id) as assistant:
             self._assistant = assistant
-            for event in assistant.start():
-                self._process_event(event)
+            events = assistant.start()
+            if args.project_id:
+                self.register_device(args.project_id, credentials,
+                            args.device_model_id, assistant.device_id)
+            for event in events:
+                self._process_event(event, assistant.device_id)
+    
+    def register_device(self, project_id, credentials, device_model_id, device_id):
+        """Register the device if needed.
+        Registers a new assistant device if an instance with the given id
+        does not already exists for this model.
+        Args:
+        project_id(str): The project ID used to register device instance.
+        credentials(google.oauth2.credentials.Credentials): The Google
+                    OAuth2 credentials of the user to associate the device
+                    instance with.
+        device_model_id: The registered device model ID.
+        device_id: The device ID of the new instance.
+        """
+        base_url = '/'.join([DEVICE_API_URL, 'projects', project_id, 'devices'])
+        device_url = '/'.join([base_url, device_id])
+        session = google.auth.transport.requests.AuthorizedSession(credentials)
+        r = session.get(device_url)
+        print(device_url, r.status_code)
+        if r.status_code == 404:
+            print('Registering....', end='', flush=True)
+            r = session.post(base_url, data=json.dumps({
+                'id': device_id,
+                'model_id': device_model_id,
+            }))
+            if r.status_code != 200:
+                raise Exception('failed to register device: ' + r.text)
+            print('\rDevice registered.')
+
+    def process_device_actions(self, event, device_id):
+        if 'inputs' in event.args:
+            for i in event.args['inputs']:
+                if i['intent'] == 'action.devices.EXECUTE':
+                    for c in i['payload']['commands']:
+                        for dev in c['devices']:
+                            if dev['id'] == device_id:
+                                if 'execution' in c:
+                                    for e in c['execution']:
+                                        if e['params']:
+                                            yield e['command'], e['params']
+                                        else:
+                                            yield e['command'], None    
 
     def process_command(self, cmd):
         if cmd == 'google':
@@ -57,7 +119,7 @@ class MyAssistant(object):
             commands.Sound('down')
             self._assistant.stop_conversation()
     
-    def _process_event(self, event):
+    def _process_event(self, event, device_id):
 
         if event.type == EventType.ON_START_FINISHED:
             self.window.printTranscript(event, 'LEFT')
@@ -66,6 +128,10 @@ class MyAssistant(object):
         elif event.type == EventType.ON_RECOGNIZING_SPEECH_FINISHED and event.args:
             self.window.printTranscript(event.args, 'RIGHT')
             # self.process_command(event.args['text'].lower())
+        elif event.type == EventType.ON_DEVICE_ACTION:
+            for command, params in self.process_device_actions(event, device_id):
+                print(event)
+                print("Executing command", command, 'with params', str(params))
         elif event.type == EventType.ON_RESPONDING_STARTED:
             self.window.printTranscript(event, 'LEFT')
         elif event.type == EventType.ON_CONVERSATION_TURN_FINISHED:

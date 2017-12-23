@@ -1,0 +1,24 @@
+{
+  "name": "jarvis-pubsub-publish",
+  "version": "0.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Mukil Elango",
+  "engines": {
+    "node": ">=4.3.2"
+  },
+  "dependencies": {
+    "@google-cloud/pubsub": "0.16.1",
+    "safe-buffer": "5.1.1"
+  },
+  "devDependencies": {
+    "@google-cloud/nodejs-repo-tools": "1.4.17",
+    "ava": "0.21.0",
+    "proxyquire": "1.8.0",
+    "sinon": "3.2.0"
+  },
+  "cloud-repo-tools": {
+    "requiresKeyFile": true,
+    "requiresProjectId": true
+  }
+}
